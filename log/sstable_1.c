@@ -3,6 +3,7 @@
 * init_table
 *   - name
 *   - table_file_path (where data will be stored)
+*   - sstable_size (4kb)
 *   - sstable_paths (where each sstable will be stored)
 *   - sstable_lookup_map (sorted map of key-sstable_path)
 * 
@@ -24,6 +25,8 @@
 *       - loop through 
 *   - returns int address of corresponding record in table file if key exists
 *   - returns -1 if key doens't exist 
+* 
+* char* get_from_data_file
 * 
 * 
 * 
