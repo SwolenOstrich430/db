@@ -2,6 +2,8 @@
 * ===== TYPE DEFS
 * init_table
 *   - name
+*   - key_size (num bytes each key should be)
+*   - record_size (num bytes each record should be)
 *   - table_file_path (where data will be stored)
 *   - sstable_size (4kb)
 *   - sstable_paths (where each sstable will be stored)
@@ -16,19 +18,18 @@
 *   - sstable_address
 * 
 * ===== DATA HANDLING
-* char* get_sstable_for_key(unsigned char* key)
+* unsigned char* get_sstable_for_key(unsigned char* key)
 *   - returns path to the sstable if key exists
 *   - returns NULL if not exists 
 * 
-* int get_address_from_sstable(unsigned char* key, FILE* file_ptr)
-*   - function: 
-*       - loop through 
+* int get_record_from_sstable(unsigned char* key, FILE* file_ptr)
 *   - returns int address of corresponding record in table file if key exists
 *   - returns -1 if key doens't exist 
 * 
-* char* get_from_data_file
+* unsigned char* get_from_data_file
 * 
 * 
+* unsigned char* rpad(unsigned char* str, size_t size)
 * 
 * ===== FILE HANDLING
 * get_table_file_path -> log/data/<table_name>/<table_name>.table
