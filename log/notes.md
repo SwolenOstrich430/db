@@ -10,7 +10,7 @@
         - where record starts in file 
 * [example](./log_db_hash_map.c)
 
-### SSTable
+### SSTable (Simple Simple)
 * files of 4kb
     * list of sorted key-val pairs
     * where:
