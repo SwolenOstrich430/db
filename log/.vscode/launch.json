@@ -1,0 +1,23 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug C Program",
+      // "command": "gcc -g ${workspaceFolder}/${file}",
+      "program": "${workspaceFolder}/out",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": true
+    },
+    {
+      "name": "C/C++ Runner: Debug Session",
+      "type": "lldb",
+      "request": "launch",
+      "args": [],
+      "cwd": ".",
+      "program": "build/Debug/outDebug"
+    }
+  ]
+}
