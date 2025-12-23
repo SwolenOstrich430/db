@@ -10,19 +10,35 @@
 
 char* TABLE_FILE_HEADER = "===========TABLE===========";
 char* SSTABLE_FILE_HEADER = "===========SSTABLE==========";
+unsigned char* SSTABLE_LOOKUP_SEPERAOTOR = ":";
 char* TABLE_DIR = "tables";
 
 typedef struct {
+    unsigned char* id;
     unsigned char* bytes;          
     size_t size;
 } record_t;
 
 // hash map we'll use for record lookups 
 typedef struct { 
-    int id;
+    unsigned char* id;
     int address_start;
     UT_hash_handle hh;
 } id_address_lookup_t;
+
+int cmp_address_lookup(
+    const id_address_lookup_t* lookup_1, 
+    const id_address_lookup_t* lookup_2
+) {
+    return strcmp(lookup_1->id, lookup_2->id);
+}
+
+int cmp_address_lookup_reverse(
+    const id_address_lookup_t* lookup_1, 
+    const id_address_lookup_t* lookup_2
+) {
+    return -cmp_address_lookup(lookup_1, lookup_2);
+}
 
 typedef struct {
     int max_file_size;
@@ -39,9 +55,16 @@ typedef struct {
 } table_t;
 
 
-// unsigned char* rpad(unsigned char* str, size_t size) {
+void rpad(unsigned char* buffer, const char *str, size_t size) {
+    strncpy(buffer, str, size);
 
-// } 
+    int str_len = strlen(buffer);
+    if (str_len >= size) return;
+
+    for (int i = str_len; i < size; i++) {
+        buffer[i] = ' ';
+    }
+}
 
 int MAX_DIR_LEN = 256;
 int MAX_LEN_TABLE_NAME = 20;
@@ -169,14 +192,17 @@ char* get_next_sstable_file_name(char* table_name) {
     return get_sstable_file_name(table_name, num_files);
 }
 
-void create_sstable_file(char* table_name) {
+char* create_sstable_file(char* table_name) {
     char* file_path = get_next_sstable_file_name(table_name);
+    
     FILE* file_ptr = fopen(file_path, "w");
     fprintf(file_ptr, "%s", SSTABLE_FILE_HEADER);
     fclose(file_ptr);
+    
+    return file_path;
 }
 
-id_address_lookup_t* init_sstable_lookup(int id, int address_start) {
+id_address_lookup_t* init_sstable_lookup(unsigned char* id, int address_start) {
     id_address_lookup_t* address_lookup = malloc(sizeof(id_address_lookup_t));
     address_lookup->id = id;
     address_lookup->address_start = address_start;
@@ -197,8 +223,14 @@ sstable_t* init_sstable(
     return sstable;
 }
 
-record_t* init_record(unsigned char* key, unsigned char* bytes) {
+record_t* init_record(
+    unsigned char* id, 
+    unsigned char* bytes, 
+    size_t key_size, 
+    size_t content_size
+) {
     record_t* record = malloc(sizeof(record_t));
+    record->id = id;
     record->bytes = bytes;
     record->size = sizeof(bytes);
     return record;
@@ -220,20 +252,32 @@ table_t* init_table(
     return table;
 }
 
-// unsigned char* get_sstable_for_key(unsigned char* key) {
+unsigned char* get_sstable_for_key(unsigned char* key) {
 
-// }
+}
 
-// int get_record_address_from_sstable(unsigned char* key, FILE* file_ptr) {
+int get_record_address_from_sstable(unsigned char* key, sstable_t* sstable) {
 
-// }
+}
 
-// void get_record_from_data_file(unsigned char* buffer, int record_address) {
+int get_address_from_sstable(unsigned char* key, char* sstable_dir) {
+    FILE* file_ptr = fopen(sstable_dir, "r");
+    int address = get_record_address_from_sstable(key, file_ptr);
+    fclose(file_ptr);
+    return address;
+}
 
-// }
+void get_record_from_data_file(record_t* record, table_t* table, int record_address) {
 
-// int set(unsigned char* key, record_t* record) {
+}
+
+int set(table_t* table, unsigned char* key, record_t* record) {
     // compare key to sstable lookup 
+    int sstable_address = get_address_from_sstable(
+        key, 
+        table->sstable->sstable_dir
+    );
+
     // if sstable lookup available 
     //      - look for val in sstable file 
     //      - if address in lookup
@@ -242,11 +286,170 @@ table_t* init_table(
     //      - look for table in data file 
     //      - use new space in file for write 
     // write to file 
-// }
+}
 
 // record_t* get(unsigned char* key) {
 //     // 
 // }
+
+// append record to data file
+// seek to end of data file 
+// add record append to data file  
+// return start of address 
+int append_entry_to_data_file(table_t* table, record_t* record) {
+    FILE *file_ptr = fopen(table->data_file_path, "rb");
+    // TODO: handle file open errors 
+
+    fseek(file_ptr, 0, SEEK_END);
+    int start_address = ftell(file_ptr);
+    fwrite(record->bytes, record->size, 1, file_ptr);
+    fclose(file_ptr);
+    
+    return start_address;
+}
+
+id_address_lookup_t* parse_sstable_file_entry(
+    id_address_lookup_t* lookup, 
+    unsigned char* entry
+) {
+    char* id = strtok(entry, SSTABLE_LOOKUP_SEPERAOTOR);
+    char* address = strtok(NULL, SSTABLE_LOOKUP_SEPERAOTOR);
+
+    lookup->id = id;
+    lookup->address_start = atoi(address);
+    return lookup;
+}
+
+// add as record to address_lookup_map 
+//     - id: record->id
+//     - file_path: created file path from above 
+
+int append_entry_to_sstable_file(
+    table_t* table,
+    char* sstable_file_path, 
+    unsigned char* id, 
+    int start_address
+) {
+    unsigned char* formatted_key; 
+    unsigned char* formatted_address;
+    rpad(formatted_key, id, table->key_size);
+    rpad(formatted_address, (char*)start_address, sizeof(int));
+
+    size_t entry_size = table->key_size + sizeof(int) + sizeof(SSTABLE_LOOKUP_SEPERAOTOR);
+    
+    unsigned char* file_entry[entry_size];
+    snprintf(
+        file_entry, 
+        entry_size, 
+        "%s%s%s", 
+        formatted_key, 
+        SSTABLE_LOOKUP_SEPERAOTOR, 
+        formatted_address
+    );
+
+    FILE *file_ptr = fopen(sstable_file_path, "rb+");
+    fseek(file_ptr, 0, SEEK_END);
+    int file_length = ftell(file_ptr); 
+    rewind(file_ptr);
+
+    fseek(file_ptr, 0, strlen(SSTABLE_FILE_HEADER));
+
+    unsigned char* curr_file_entry[entry_size];
+    size_t bytes_read;
+    id_address_lookup_t* lookup = malloc(sizeof(id_address_lookup_t));
+
+    while ((bytes_read = fread(curr_file_entry, 1, entry_size, file_ptr)) == entry_size) {
+        lookup = parse_sstable_file_entry(lookup, curr_file_entry);
+        
+        if (strcmp(lookup->id, id) < 0) {
+            break;
+        }
+    }
+
+    int final_index = ftell(file_ptr); 
+    if (final_index < file_length) {
+        // shift file in place 
+    } else {
+        fprintf(file_ptr, "%s", file_entry);
+    }
+
+    free(lookup);
+    fclose(file_ptr);
+}
+
+int append_entry(table_t* table, record_t* record) {
+    int start_address = append_entry_to_data_file(table, record);
+    char* sstable_file = create_sstable_file(table->name);
+    append_entry_to_sstable_file(table, sstable_file, record->id, start_address);
+    // add as record to address_lookup_map 
+    //     - id: record->id
+    //     - file_path: created file path from above 
+
+    FILE* file_ptr = fopen(table->data_file_path, "rb+");
+    fwrite(record->bytes, record->size, 1, file_ptr);
+    fclose(file_ptr);
+}
+
+int main() {
+    size_t key_size = 10;
+    size_t record_size = 10;
+
+    char* table_name = "test_table";
+    sstable_t* sstable = init_sstable(4096, "test_table");
+    table_t* table = init_table("test_table", key_size, record_size, sstable);
+    record_t* record = init_record("key1", "value1", key_size, record_size); 
+
+    /*
+    * - set 
+    *   - while an available key exists in sstable_lookup_map 
+    *       - find key: 
+    *           - closest key < current_key that hasn't been checked yet 
+    *           - if no key exists, use first key in sstable_lookup_map
+    *       - if key exists  
+    *           - check sstable file for key  
+    *       - if record in sstable file exists 
+    *           - update record at address  
+    *           - return  
+    *   - if record found  
+    *       - add record to end of table file  
+    *       - find the key closest to the current key in sstable_lookup_map
+    *       - loop through sstable in file 
+    *          - find sorted order for key in that file 
+    *          - insert record at address
+    */
+    HASH_SORT(table->sstable->address_lookup, cmp_address_lookup_reverse);
+    id_address_lookup_t *curr_lu;
+    unsigned char* closest_id = NULL;
+    
+    for(
+        curr_lu=table->sstable->address_lookup; 
+        curr_lu != NULL; 
+        curr_lu=(id_address_lookup_t*)(curr_lu->hh.next)
+    ) {
+        if (strcmp(curr_lu->id, record->id) > 0) {
+            continue;
+        }
+
+        // look for key in sstable file  
+        int record_address = get_record_address_from_sstable(
+            record->id,
+            table->sstable
+        );
+
+        if (record_address < 0) {
+            continue;
+        }
+
+        record_t* found_record;
+        get_record_from_data_file(found_record, table, record_address);
+        closest_id = curr_lu->id;
+    }
+
+    if (closest_id == NULL) { 
+        append_entry(table, record);
+        // add that entry to the sstable map 
+    }
+}
 
 /*
 * ===== TYPE DEFS
@@ -293,11 +496,3 @@ table_t* init_table(
 * get_sstable_dir -> log/data/<table_name>/sstable/
 * get_data_dir    -> log/data/<table_name>
 */
-
-int main() {
-    char* table_name = "test_table";
-    sstable_t* sstable = init_sstable(4096, "test_table");
-    table_t* table = init_table("test_table", 10, 10, sstable);
-    
-    
-}
