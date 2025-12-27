@@ -46,6 +46,21 @@
 *   - get record from table file using record address
 *      - else, return error (record not found)
 *   - return record bytes
+* ===== Future Async Jobs 
+* ## Load SSTable Lookup Map from Disk 
+* - For each file with format <SSTABLE_FILE_FORMAT> 
+*   - in directory: `./tables/<table_name>/sstable/`
+*       - validate block sizes  
+*       - for each block 
+*           - if <CONFIG::VALIDATE_SSTABLE_LOOKUP_ON_LOAD>
+*               - validate lookup entries in block
+*                   - if invalid, throw error and stop loading sstable lookup map
+*           - create <SSTABLE_LOOKUP_T> from: 
+*               - sstable_file_name 
+*               - block_number 
+*               - first id in block 
+*          - add to sstable lookup map
+* ## Load Memtable From Disk
 * ===== TYPE DEFS
 * init_table
 *   - name
