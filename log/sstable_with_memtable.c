@@ -28,7 +28,7 @@
 *   - append record to table file 
 *       - return address of record in table file
 *   - add id and address to memtable
-*      - add id and address to memtable file on disk
+*      - add id and address to memtable file 
 *   - if memtable size + new record size > max memtable size
 *       - flush memtable to new sstable file (see Flush Memtable)
 *           - in the future this will be handled on a seperate thread 
@@ -49,7 +49,7 @@
 *      - else, return error (record not found)
 *   - return record bytes
 * ===== Future Async Jobs 
-* ## Load SSTable Lookup Map from Disk 
+* ## Load SSTable Lookup Map 
 * - For each file with format <SSTABLE_FILE_FORMAT> 
 *   - in directory: `./tables/<table_name>/sstable/`
 *       - validate block sizes  
