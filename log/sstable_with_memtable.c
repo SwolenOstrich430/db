@@ -28,11 +28,13 @@
 *   - append record to table file 
 *       - return address of record in table file
 *   - add id and address to memtable
+*      - add id and address to memtable file on disk
 *   - if memtable size + new record size > max memtable size
 *       - flush memtable to new sstable file (see Flush Memtable)
 *           - in the future this will be handled on a seperate thread 
 *           - but for now, it'll block 
 *       - reset memtable
+*       - reset memtable file 
 *   - validate record was added to memtable 
 *   - return -1 on failure, 0 on success 
 * 7. Get Record
@@ -60,7 +62,51 @@
 *               - block_number 
 *               - first id in block 
 *          - add to sstable lookup map
-* ## Load Memtable From Disk
+* ## Load Memtable 
+* - open memtable file: `./tables/<table_name>/memtable/<table_name>.memtable`
+* - ensure that `sstable->memtable` is initialized and empty
+* - for each entry in memtable file
+*     - validate entry
+*         - if invalid, throw error and stop loading memtable
+*     - add entry to in-memory memtable
+* ## Flush Memtable 
+* - find overlap with memtable and sstable lookups 
+*   - overlap: 
+*       - memtable start index 
+*       - memtable end index 
+*       - where memtable[end_index][key] < sstable[file_path:block_address][key]
+* - create a new version of the sstable file 
+* - create copy of current file 
+* - create append cursor for new version of file 
+* - create read cursor for current file copy
+* - get the size of a sstable_lookup_t
+* - create variable to store current index in memtable overlap (memtable_index)
+* - create variable to store total_bytes_read from file
+* - create variable to store last_position_written in file
+* - while bytes read from file == size of sstable_lookup_t
+*   - if sstable_lookup_t[key] == memtable[memtable_index]
+*       - write tmp_old_file[last_position_written:total_bytes_read - sstable_lookup_t_size] to new version of file 
+*       - write memtable[memtable_index] to new version of file 
+*       - memtable_index++
+*       - last_position_written = total_bytes_read
+*   - if sstable_lookup_t:key > memtable[memtable_index]
+*       - write tmp_old_file[last_position_written:total_bytes_read - sstable_lookup_t_size] to new version of file 
+*       - write memtable[memtable_index] to new version of file 
+*       - memtable_index++
+*       - last_position_written = total_bytes_read - sstable_lookup_t_size
+* - if last_position_written < total_bytes_read 
+*   - write tmp_old_file[last_position_written:total_bytes_read] to new version of file 
+* - while memtable_index < len(memtable) 
+*   - write memtable[memtable_index] to new version of file 
+*   - memtable_index++
+*   - TODO: how to handle failure 
+*   - TODO: need to handle overflows in sstables 
+*   - TODO: need to handle blocks in files 
+*       - create an iterator for the sstable directory 
+*       - create an iterator for an sstable file 
+* - validate that the size of the new version of memtable equals 
+*   - TODO: add tracking for number of new keys vs. number of old keys set 
+*   - the size of the old version + (num_num_keys * sstable_lookup_t_size)
 * ===== TYPE DEFS
 * init_table
 *   - name
