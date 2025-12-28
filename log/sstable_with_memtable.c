@@ -20,8 +20,8 @@
 *   - data file path
 *   - sstable
 *   - create all necessary directories and files (see Create File Structure)
-* 4. Load SSTable Lookup Map from Disk 
-* 5. Load Memtable From Disk
+* 4. Load SSTable Lookup Map 
+* 5. Load Memtable 
 * 6. Set Record
 *   - validate id size 
 *   - validate record size 
