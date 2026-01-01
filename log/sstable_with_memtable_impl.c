@@ -1,6 +1,7 @@
 /**
  * TODO: fix: casting unsigned char to char for str-util methods 
  * TODO: fix: mkdir_force memory allocation
+ * TODO: fix: stop making sstable files if one isn't full
  */
 
 #include <stdio.h>
@@ -39,7 +40,9 @@ typedef struct {
 
 typedef struct {
     unsigned char* id;
-    int address;
+    unsigned char* address;
+    unsigned char* raw_id;
+    int raw_address;
     UT_hash_handle hh;
 } id_address_lookup_t;
 
@@ -339,8 +342,8 @@ char* create_memtable_file(char* table_name) {
 // ========== FILE HANDLING
 
 // ========== FUTURE UTILS 
-void rpad(unsigned char* buffer, char *str, size_t size) {
-    strncpy((char*) buffer, str, size);
+void rpad(unsigned char* buffer, size_t size, char *str) {
+    snprintf(buffer, size, "%s", str);
 
     int str_len = strlen(str);
     if (str_len >= size) return;
@@ -355,88 +358,128 @@ void rpad(unsigned char* buffer, char *str, size_t size) {
 // ========== LOAD LOOKUPS 
 
 
-void parse_sstable_file_entry(
-    id_address_lookup_t* lookup, 
-    unsigned char* entry,
-    size_t key_size
-) {
-    unsigned char* id = malloc(key_size);
-    rpad(id, strtok((char*) entry, SSTABLE_LOOKUP_SEPERATOR), key_size);
-    lookup->id = id;
-    lookup->address = atoi(strtok(NULL, SSTABLE_LOOKUP_SEPERATOR));
-    
-    return;
-}
+// void set_sstable_lookup_map(
+//     sstable_t* sstable, 
+//     char* table_name
+// ) {
+//     struct dirent *entry;
+//     int num_files = 0;
+//     int curr_block = 0;
+//     size_t file_size = 0;
+//     DIR *dir = opendir(sstable->sstable_dir_path);
 
-void set_sstable_lookup_map(
-    sstable_t* sstable, 
-    char* table_name
-) {
-    struct dirent *entry;
-    int num_files = 0;
-    int curr_block = 0;
-    size_t file_size = 0;
-    DIR *dir = opendir(sstable->sstable_dir_path);
+//     size_t block_size = sstable->block_size;
+//     size_t entry_size = sstable->id_size + sizeof(int) + sizeof(SSTABLE_LOOKUP_SEPERATOR);
+//     unsigned char* curr_lookup_entry = malloc(entry_size);
+//     char sstable_file_path[MAX_PATH_SIZE];
+//     size_t bytes_read;
+//     FILE* file_ptr;
 
-    size_t block_size = sstable->block_size;
-    size_t entry_size = sstable->id_size + sizeof(int) + sizeof(SSTABLE_LOOKUP_SEPERATOR);
-    unsigned char* curr_lookup_entry = malloc(entry_size);
-    char sstable_file_path[MAX_PATH_SIZE];
-    size_t bytes_read;
-    FILE* file_ptr;
+//     while ((entry = readdir(dir)) != NULL) {
+//         if (entry->d_type != DT_REG) continue;
 
-    while ((entry = readdir(dir)) != NULL) {
-        if (entry->d_type != DT_REG) continue;
-
-        snprintf(
-            sstable_file_path, 
-            MAX_PATH_SIZE,
-            "%s/%s", 
-            sstable->sstable_dir_path, 
-            entry->d_name
-        );           
+//         snprintf(
+//             sstable_file_path, 
+//             MAX_PATH_SIZE,
+//             "%s/%s", 
+//             sstable->sstable_dir_path, 
+//             entry->d_name
+//         );           
         
-        block_size = 0;
-        file_size = get_file_size(sstable_file_path);
-        file_ptr = fopen(sstable_file_path, "rb");
+//         block_size = 0;
+//         file_size = get_file_size(sstable_file_path);
+//         file_ptr = fopen(sstable_file_path, "rb");
 
-        while (sstable->block_size * curr_block < file_size) {
-            if ((bytes_read = fread(curr_lookup_entry, 1, entry_size, file_ptr)) == entry_size) {
-                sstable_lookup_t* sstable_lookup = malloc(sizeof(sstable_lookup_t));
-                id_address_lookup_t* address_lookup = malloc(sizeof(id_address_lookup_t));
-                parse_sstable_file_entry(address_lookup, curr_lookup_entry, sstable->id_size);
+//         while (sstable->block_size * curr_block < file_size) {
+//             if ((bytes_read = fread(curr_lookup_entry, 1, entry_size, file_ptr)) == entry_size) {
+//                 sstable_lookup_t* sstable_lookup = malloc(sizeof(sstable_lookup_t));
+//                 id_address_lookup_t* address_lookup = parse_sstable_file_entry(curr_lookup_entry, sstable->id_size);
 
-                sstable_lookup->id = malloc(sstable->id_size);
-                sstable_lookup->id = address_lookup->id;
-                sstable_lookup->block_number = curr_block;
-                sstable_lookup->file_name = strdup(entry->d_name);
-                unsigned char* id = sstable_lookup->id;
+//                 sstable_lookup->id = malloc(sstable->id_size);
+//                 sstable_lookup->id = address_lookup->id;
+//                 sstable_lookup->block_number = curr_block;
+//                 sstable_lookup->file_name = strdup(entry->d_name);
+//                 unsigned char* id = sstable_lookup->id;
 
-                HASH_ADD(
-                    hh,
-                    sstable->lookup_map, 
-                    id, 
-                    sstable->id_size, 
-                    sstable_lookup
-                );
+//                 HASH_ADD(
+//                     hh,
+//                     sstable->lookup_map, 
+//                     id, 
+//                     sstable->id_size, 
+//                     sstable_lookup
+//                 );
 
-                block_size++;
-            } else {
-                break;
-            }
-        }
-    }
+//                 block_size++;
+//             } else {
+//                 break;
+//             }
+//         }
+//     }
 
-    free(curr_lookup_entry);
-    closedir(dir);
+//     free(curr_lookup_entry);
+//     closedir(dir);
 
-    return;
-}
+//     return;
+// }
 
 // ========== LOAD LOOKUPS 
 
 
 // ========== TYPES 
+
+int id_address_lookup_cmp(
+    id_address_lookup_t* id_addr_1, 
+    id_address_lookup_t* id_addr_2 
+) {
+    if (id_addr_1 == NULL && id_addr_2 != NULL) {
+        return -1;
+    } else if (id_addr_1 != NULL && id_addr_2 == NULL) {
+        return 1;
+    } else if (id_addr_1 == NULL && id_addr_2 == NULL) {
+        return 0;
+    }
+
+    int diff = strcmp(
+        (const char*)id_addr_1->id, 
+        (const char*)id_addr_2->id
+    );
+
+    if (diff == 0) {
+        diff = id_addr_1->raw_address - id_addr_2->raw_address;
+    }
+    
+    return diff;
+}
+
+id_address_lookup_t* init_id_address_lookup(
+    size_t id_size,
+    unsigned char* id,
+    int address
+) {
+    id_address_lookup_t* lookup = malloc(sizeof(id_address_lookup_t));
+    lookup->id = malloc(id_size);
+    rpad(lookup->id, id_size, (char*)id);
+    lookup->raw_id = id;
+
+    lookup->address = malloc(sizeof(address));
+    snprintf(lookup->address, sizeof(address), "%d", address); 
+    rpad(lookup->address, sizeof(lookup->address), lookup->address);
+    lookup->raw_address = address;
+
+    return lookup;
+}
+
+// id_address_lookup_t* parse_sstable_file_entry(
+//     unsigned char* entry,
+//     size_t key_size
+// ) {
+//     return init_id_address_lookup(
+//         key_size,
+//         strtok((char*)entry, SSTABLE_LOOKUP_SEPERATOR), 
+//         atoi(strtok(NULL, SSTABLE_LOOKUP_SEPERATOR))
+//     );
+// }
+
 sstable_t* init_sstable(
     char* table_name,
     size_t id_size,
@@ -461,13 +504,91 @@ sstable_t* init_sstable(
     return sstable;
 }
 
-
-
 // ========== TYPES 
+
+// ========== PROTECTED 
+void memtable_hash_set(sstable_t* sstable, id_address_lookup_t* lookup) {
+    unsigned char* id = lookup->id;
+    HASH_ADD_KEYPTR(
+        hh,
+        sstable->memtable,
+        id,
+        sstable->id_size,
+        lookup
+    );
+
+    id_address_lookup_t* stored_lookup; 
+    HASH_FIND(
+        hh,
+        sstable->memtable,
+        lookup->id,
+        sstable->id_size,
+        stored_lookup
+    );
+
+    if (id_address_lookup_cmp(lookup, stored_lookup) != 0) {
+        perror("error: failed to add id_address lookup to memtable");
+        exit(1);
+    }
+}
+
+int get_id_address_entry_size(
+    sstable_t* sstable, 
+    id_address_lookup_t* lookup
+) {
+    return (
+        sstable->id_size + 
+        strlen(SSTABLE_LOOKUP_SEPERATOR) + 
+        strlen(lookup->address)
+    );
+}
+
+char* id_address_to_file_entry(
+    sstable_t* sstable, 
+    id_address_lookup_t* lookup
+) {
+    int entry_size = get_id_address_entry_size(sstable, lookup);
+    char* file_entry = malloc(entry_size);
+
+    snprintf(
+        file_entry,
+        entry_size,
+        "%s%s%s",
+        lookup->id,
+        SSTABLE_LOOKUP_SEPERATOR,
+        lookup->address
+    );
+
+    return file_entry;
+}
+
+void memtable_file_append(sstable_t* sstable, id_address_lookup_t* lookup) {
+    FILE* file_ptr = fopen(sstable->memtable_file_path, "ab");
+    unsigned char* id_addr_entry = id_address_to_file_entry(sstable, lookup);
+    int address = ftell(file_ptr);
+    int entry_size = get_id_address_entry_size(sstable, lookup);
+
+    fwrite(id_addr_entry, 1, entry_size, file_ptr);
+    fclose(file_ptr);
+    free(id_addr_entry);
+
+    return;
+}
+
+void memtable_append(sstable_t* sstable, id_address_lookup_t* lookup) {
+    memtable_hash_set(sstable, lookup);
+    memtable_file_append(sstable, lookup);
+    // verify lookup value matches provided value 
+    // add the lookup to the end of the memtable file 
+    // store the return address in a variable 
+    // verify that the value matches provided value 
+}
+
+// ========== PROTECTED
 
 int main() {
     char* table_name = "test_table";
-    size_t id_size = 10;
+    size_t id_size = 50;
     size_t block_size = 4096;
     int blocks_per_sstable = 4;
     size_t sstable_size = block_size * blocks_per_sstable;
@@ -478,6 +599,24 @@ int main() {
         blocks_per_sstable
     );
 
+    int num_iters = 10;
+    /**
+     * 1. add entry to memtable (in-memory)
+     * 2. add entry to memtable (file)
+     */
+    uuid_t binuuid;
+    unsigned char *uuid_str = malloc(id_size); 
+    id_address_lookup_t* lookup;
+
+    for (int i = 0; i < num_iters; i++) {
+        uuid_generate_random(binuuid);
+        uuid_unparse(binuuid, (char*)uuid_str); 
+        lookup = init_id_address_lookup(sstable->id_size, uuid_str, i);
+
+        memtable_append(sstable, lookup);
+    }
+    
+    free(uuid_str);
     return 0;
 }
 
