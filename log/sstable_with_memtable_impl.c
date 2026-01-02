@@ -2,6 +2,7 @@
  * TODO: fix: casting unsigned char to char for str-util methods 
  * TODO: fix: mkdir_force memory allocation
  * TODO: fix: stop making sstable files if one isn't full
+ * TODO: fix: add validation that an entry was able to be prased in 'parse_sstable_file_entry'
  */
 
 #include <stdio.h>
@@ -342,6 +343,15 @@ char* create_memtable_file(char* table_name) {
 // ========== FILE HANDLING
 
 // ========== FUTURE UTILS 
+
+int get_id_address_entry_size(size_t id_size) {
+    return (
+        id_size + 
+        strlen(SSTABLE_LOOKUP_SEPERATOR) + 
+        sizeof(int)
+    );
+}
+
 void rpad(unsigned char* buffer, size_t size, char *str) {
     snprintf(buffer, size, "%s", str);
 
@@ -469,16 +479,54 @@ id_address_lookup_t* init_id_address_lookup(
     return lookup;
 }
 
-// id_address_lookup_t* parse_sstable_file_entry(
-//     unsigned char* entry,
-//     size_t key_size
-// ) {
-//     return init_id_address_lookup(
-//         key_size,
-//         strtok((char*)entry, SSTABLE_LOOKUP_SEPERATOR), 
-//         atoi(strtok(NULL, SSTABLE_LOOKUP_SEPERATOR))
-//     );
-// }
+id_address_lookup_t* parse_sstable_file_entry(
+    char* entry,
+    size_t key_size
+) {
+    return init_id_address_lookup(
+        key_size,
+        strtok((char*)entry, SSTABLE_LOOKUP_SEPERATOR), 
+        atoi(strtok(NULL, SSTABLE_LOOKUP_SEPERATOR))
+    );
+}
+
+void load_memtable_from_file(sstable_t* sstable) {
+    sstable->memtable = NULL;
+    // create the file if it doesn't exist 
+    char* file_path = create_memtable_file(sstable->table_name);
+
+    // if it doesn't exist after we force create, error and exit 
+    struct stat st;
+    if (stat(file_path, &st) != 0) {
+        perror("error: unable to create memtable file");
+        exit(1);
+    }
+
+    // loop through each entry
+    // if we fail to get to the end of the file, error
+    size_t entry_size = get_id_address_entry_size(sstable->id_size);
+    FILE* pfile = fopen(file_path, "rb");
+    char* curr_entry = malloc(entry_size);
+    id_address_lookup_t* lookup;
+    int bytes_read;
+    unsigned char* id;
+
+    while ((bytes_read = fread(curr_entry, 1, entry_size, pfile)) == entry_size) {
+        lookup = parse_sstable_file_entry(curr_entry, sstable->id_size);
+        id = lookup->id;
+
+        HASH_ADD(
+            hh, 
+            sstable->memtable,
+            id,
+            sstable->id_size,
+            lookup
+        );
+    }
+
+    free(curr_entry);
+    return;
+}
 
 sstable_t* init_sstable(
     char* table_name,
@@ -497,9 +545,7 @@ sstable_t* init_sstable(
     sstable->lookup_map = NULL;
 
     create_sstable_file(table_name);
-
-    sstable->memtable_file_path = create_memtable_file(table_name);
-    sstable->memtable = NULL;
+    load_memtable_from_file(sstable);
 
     return sstable;
 }
@@ -507,6 +553,7 @@ sstable_t* init_sstable(
 // ========== TYPES 
 
 // ========== PROTECTED 
+
 void memtable_hash_set(sstable_t* sstable, id_address_lookup_t* lookup) {
     unsigned char* id = lookup->id;
     HASH_ADD_KEYPTR(
@@ -532,22 +579,11 @@ void memtable_hash_set(sstable_t* sstable, id_address_lookup_t* lookup) {
     }
 }
 
-int get_id_address_entry_size(
-    sstable_t* sstable, 
-    id_address_lookup_t* lookup
-) {
-    return (
-        sstable->id_size + 
-        strlen(SSTABLE_LOOKUP_SEPERATOR) + 
-        strlen(lookup->address)
-    );
-}
-
 char* id_address_to_file_entry(
     sstable_t* sstable, 
     id_address_lookup_t* lookup
 ) {
-    int entry_size = get_id_address_entry_size(sstable, lookup);
+    int entry_size = get_id_address_entry_size(sstable->id_size);
     char* file_entry = malloc(entry_size);
 
     snprintf(
@@ -564,9 +600,9 @@ char* id_address_to_file_entry(
 
 void memtable_file_append(sstable_t* sstable, id_address_lookup_t* lookup) {
     FILE* file_ptr = fopen(sstable->memtable_file_path, "ab");
-    unsigned char* id_addr_entry = id_address_to_file_entry(sstable, lookup);
+    char* id_addr_entry = id_address_to_file_entry(sstable, lookup);
     int address = ftell(file_ptr);
-    int entry_size = get_id_address_entry_size(sstable, lookup);
+    size_t entry_size = get_id_address_entry_size(sstable->id_size);
 
     fwrite(id_addr_entry, 1, entry_size, file_ptr);
     fclose(file_ptr);
@@ -578,10 +614,6 @@ void memtable_file_append(sstable_t* sstable, id_address_lookup_t* lookup) {
 void memtable_append(sstable_t* sstable, id_address_lookup_t* lookup) {
     memtable_hash_set(sstable, lookup);
     memtable_file_append(sstable, lookup);
-    // verify lookup value matches provided value 
-    // add the lookup to the end of the memtable file 
-    // store the return address in a variable 
-    // verify that the value matches provided value 
 }
 
 // ========== PROTECTED
@@ -601,6 +633,7 @@ int main() {
 
     int num_iters = 10;
     /**
+     * 1. load memtable from file
      * 1. add entry to memtable (in-memory)
      * 2. add entry to memtable (file)
      */
