@@ -26,18 +26,29 @@ char* MEMTABLE_DIR = "memtable";
 char* MEMTABLE_FILE_EXTENSION = "memtable";
 int DEFAULT_PERMISSIONS = 0775;
 size_t MAX_PATH_SIZE = 256;
+size_t MIN_BLOCK_SIZE = 512;
+size_t SSTABLE_ADDRESS_HASH_SIZE = 20;
 
 typedef struct {
     unsigned char* sstable_file_name;
     int block_number;
+    unsigned char* hash_code;
 } sstable_address_t;
 
 typedef struct {
     unsigned char* id;
-    char* file_name;
-    int block_number;
+    sstable_address_t* address;
     UT_hash_handle hh;
 } sstable_lookup_t;
+
+typedef struct {
+    unsigned char** ids;
+    size_t ids_length;
+    size_t ids_capacity;
+    sstable_address_t* address;
+    unsigned char* id;
+    UT_hash_handle hh;
+} future_sstable_lookup_t;
 
 typedef struct {
     unsigned char* id;
@@ -52,10 +63,12 @@ typedef struct {
     size_t id_size;
     size_t block_size;
     size_t max_size;
+    int num_blocks;
     id_address_lookup_t* memtable;
     sstable_lookup_t* lookup_map;
     char* sstable_dir_path;
     char* memtable_file_path;
+    size_t sstable_address_hash_size;
 } sstable_t;
 
 // ========== FILE HANDLING 
@@ -353,9 +366,9 @@ int get_id_address_entry_size(size_t id_size) {
 }
 
 void rpad(unsigned char* buffer, size_t size, char *str) {
-    snprintf(buffer, size, "%s", str);
-
-    int str_len = strlen(str);
+    snprintf((char*)buffer, size, "%s", str);
+    
+    int str_len = strlen((char*)buffer);
     if (str_len >= size) return;
 
     for (int i = str_len; i < size; i++) {
@@ -468,24 +481,24 @@ id_address_lookup_t* init_id_address_lookup(
 ) {
     id_address_lookup_t* lookup = malloc(sizeof(id_address_lookup_t));
     lookup->id = malloc(id_size);
-    rpad(lookup->id, id_size, (char*)id);
+    rpad((char*)lookup->id, id_size, (char*)id);
     lookup->raw_id = id;
 
     lookup->address = malloc(sizeof(address));
-    snprintf(lookup->address, sizeof(address), "%d", address); 
-    rpad(lookup->address, sizeof(lookup->address), lookup->address);
+    snprintf((char*)lookup->address, sizeof(address), "%d", address); 
+    rpad((char*)lookup->address, sizeof(lookup->address), (char*)lookup->address);
     lookup->raw_address = address;
 
     return lookup;
 }
 
 id_address_lookup_t* parse_sstable_file_entry(
-    char* entry,
+    unsigned char* entry,
     size_t key_size
 ) {
     return init_id_address_lookup(
         key_size,
-        strtok((char*)entry, SSTABLE_LOOKUP_SEPERATOR), 
+        strtok(entry, SSTABLE_LOOKUP_SEPERATOR), 
         atoi(strtok(NULL, SSTABLE_LOOKUP_SEPERATOR))
     );
 }
@@ -507,25 +520,247 @@ void load_memtable_from_file(sstable_t* sstable) {
     size_t entry_size = get_id_address_entry_size(sstable->id_size);
     FILE* pfile = fopen(file_path, "rb");
     char* curr_entry = malloc(entry_size);
-    id_address_lookup_t* lookup;
+    unsigned char* id = NULL;
     int bytes_read;
-    unsigned char* id;
+    unsigned char* prev_id = NULL;
 
     while ((bytes_read = fread(curr_entry, 1, entry_size, pfile)) == entry_size) {
-        lookup = parse_sstable_file_entry(curr_entry, sstable->id_size);
-        id = lookup->id;
+        id_address_lookup_t* lookup = parse_sstable_file_entry(curr_entry, sstable->id_size);
+        id_address_lookup_t* found_lookup = NULL;
 
-        HASH_ADD(
-            hh, 
+        HASH_FIND(
+            hh,
             sstable->memtable,
-            id,
+            lookup->id,
             sstable->id_size,
-            lookup
+            found_lookup
         );
+
+        if (found_lookup == NULL) {
+            HASH_ADD_KEYPTR(
+                hh, 
+                sstable->memtable,
+                lookup->id,
+                sstable->id_size,
+                lookup
+            );
+        }
+
+        if (prev_id != NULL && strcmp(prev_id, lookup->id) == 0) {
+            int i = 0;
+        }
+
+        prev_id = lookup->id;
     }
 
     free(curr_entry);
+    sstable->memtable_file_path = file_path;
     return;
+}
+
+unsigned long djb2_hash(char *str) {
+    unsigned long hash = 5381; 
+    int c;
+
+    while ((c = *str++)) {
+        hash = ((hash << 5) + hash) + c; 
+    }
+
+    return hash;
+}
+
+unsigned char* sstable_address_to_hash(
+    sstable_address_t* address, 
+    size_t hash_size
+) {
+    if (address == NULL || address->sstable_file_name == NULL) {
+        perror("Provided 'addres' or 'address->sstable_file_name' was null");
+        exit(1);
+    }
+    
+    size_t val_size = strlen(address->sstable_file_name) + sizeof(int);
+    char val_to_hash[val_size];
+    char* addr_hash = malloc(
+        strlen(address->sstable_file_name) + sizeof(int)
+    );
+    
+    snprintf(
+        val_to_hash, 
+        sizeof(val_size), 
+        "%s%d", 
+        address->sstable_file_name, 
+        address->block_number
+    );
+
+    unsigned long hash_as_long = djb2_hash(val_to_hash);
+    memcpy(addr_hash, &hash_as_long, hash_size);
+    rpad(addr_hash, hash_size, addr_hash);
+
+    return addr_hash;
+}
+
+sstable_address_t* init_sstable_address(
+    sstable_t* sstable,
+    char* sstable_file_name,
+    int block_number
+) {
+    // TODO: turn these into helper functions 
+    if (sstable_file_name == NULL || strlen(sstable_file_name) == 0) {
+        perror("Provided 'sstable_file_name' is null or empty.");
+        exit(1);
+    }
+
+    if (block_number < 0) {
+        perror("Provided block_number is null or less than zero.");
+        exit(1);
+    }
+
+    int file_path_size = MAX_PATH_SIZE + sizeof(int);
+    sstable_address_t* address = malloc(sizeof(sstable_address_t));
+    
+    if (strstr(sstable_file_name, sstable->sstable_dir_path) == NULL) {
+        address->sstable_file_name = malloc(file_path_size);
+        snprintf(
+            address->sstable_file_name, 
+            file_path_size, 
+            "%s/%s", 
+            sstable->sstable_dir_path, 
+            sstable_file_name
+        );
+    } else {
+        address->sstable_file_name = sstable_file_name;
+    }
+
+    address->block_number = block_number;
+    address->hash_code = sstable_address_to_hash(
+        address, 
+        SSTABLE_ADDRESS_HASH_SIZE
+    );
+
+    return address;
+}
+
+sstable_lookup_t* init_sstable_lookup(
+    sstable_t* sstable,
+    unsigned char* id,
+    char* sstable_file_name,
+    int block_number
+) {
+    sstable_address_t* address = init_sstable_address(
+        sstable,
+        sstable_file_name,
+        block_number
+    );
+
+    sstable_lookup_t* lookup = malloc(sstable->id_size + sizeof(sstable_address_t));
+    lookup->id = id;
+    lookup->address = address;
+
+    return lookup;
+}
+
+int get_sstable_lookup_entry_size(sstable_t* sstable) {
+    return (
+        sstable->id_size + 
+        sizeof(int) + 
+        sizeof(SSTABLE_LOOKUP_SEPERATOR)
+    );
+}
+
+// for each file in the sstable dir 
+// for each block in the current file 
+// create an sstable_address_t 
+//      - with file_path 
+//      - and the current block number 
+// create a variable to hold the current id
+// read sstable->id_size bytes into the current_id variable  
+// create an sstable_lookup_t
+//      - set id to current_id
+//      - set address to the sstable_address_t
+// add the sstable_lookup_t to the sstable->lookup_map:
+//      - key: id
+//      - value: the sstable_lookup_t
+void load_sstable_lookup_map_from_file(sstable_t* sstable) {
+    if (sstable == NULL) {
+        perror("Provided sstable cannot be null");
+        exit(1);
+    }
+
+    if (sstable->block_size == NULL || sstable->block_size < MIN_BLOCK_SIZE) {
+        perror("Provided sstable has an invalid block size");
+        exit(1);
+    }
+
+    sstable->lookup_map = NULL;
+    DIR *dr;
+    struct dirent *sstable_file;
+    dr = opendir(sstable->sstable_dir_path);
+    if (dr == NULL) {
+        perror("Could not open directory");
+        exit(1);
+    }
+
+    int block_number;
+    int bytes_read;
+    char* curr_file = malloc(MAX_PATH_SIZE);
+    FILE* pfile;
+    int entry_size = get_id_address_entry_size(sstable->id_size);
+
+    while ((sstable_file = readdir(dr)) != NULL) {
+        if (
+            strcmp(sstable_file->d_name, ".") == 0 || 
+            strcmp(sstable_file->d_name, "..") == 0 || 
+            strstr(sstable_file->d_name, "_temp")
+        ) {
+            continue;
+        }
+
+        block_number = 0;
+        snprintf(
+            curr_file, 
+            MAX_PATH_SIZE, 
+            "%s/%s", 
+            sstable->sstable_dir_path, 
+            sstable_file->d_name
+        );
+
+        pfile = fopen(curr_file, "rb");
+        unsigned char* entry = malloc(entry_size);
+        block_number = 0;
+
+        while ((bytes_read = fread(entry, 1, entry_size, pfile)) == entry_size) {
+            id_address_lookup_t* lookup = parse_sstable_file_entry(entry, sstable->id_size);
+
+            if (lookup == NULL) {
+                perror("error: unable to parse sstable lookup entry from file");
+                exit(1);
+            }
+            
+            sstable_lookup_t* address = init_sstable_lookup(
+                sstable,
+                lookup->id,
+                sstable_file->d_name,
+                block_number
+            );
+
+            HASH_ADD_KEYPTR(hh, sstable->lookup_map, lookup->id, sstable->id_size, address);
+
+            // TODO: double check that this gets us to the next block correctly
+            fseek(pfile, sstable->block_size + 1, SEEK_SET);
+            block_number++;
+
+            if (block_number > sstable->num_blocks) {
+                perror("Current sstbale file has too many blocks");
+                exit(1);
+            }
+
+            if (ftell(pfile) > sstable->max_size) {
+                perror("Current sstable file is greater than max size");
+                exit(1);
+            }
+        }
+    }
+
 }
 
 sstable_t* init_sstable(
@@ -539,12 +774,16 @@ sstable_t* init_sstable(
     sstable->table_name = table_name;
     sstable->id_size = id_size;
     sstable->block_size = block_size;
-    sstable->max_size = block_size * num_blocks;
+    sstable->num_blocks = num_blocks;
+    // TODO: add this as a config option in sstbale instead of just as constant 
+    sstable->sstable_address_hash_size = SSTABLE_ADDRESS_HASH_SIZE;
+    sstable->max_size = sstable->block_size * sstable->num_blocks;
 
     sstable->sstable_dir_path = create_sstable_dir(table_name);
-    sstable->lookup_map = NULL;
+    // create_sstable_file(table_name);
+    load_sstable_lookup_map_from_file(sstable);
 
-    create_sstable_file(table_name);
+    sstable->memtable = NULL;
     load_memtable_from_file(sstable);
 
     return sstable;
@@ -600,6 +839,11 @@ char* id_address_to_file_entry(
 
 void memtable_file_append(sstable_t* sstable, id_address_lookup_t* lookup) {
     FILE* file_ptr = fopen(sstable->memtable_file_path, "ab");
+    if (file_ptr == NULL) {
+        perror("Unable to open memtable file.");
+        exit(1);
+    }
+
     char* id_addr_entry = id_address_to_file_entry(sstable, lookup);
     int address = ftell(file_ptr);
     size_t entry_size = get_id_address_entry_size(sstable->id_size);
@@ -618,6 +862,324 @@ void memtable_append(sstable_t* sstable, id_address_lookup_t* lookup) {
 
 // ========== PROTECTED
 
+int cmp_sstable_lookup(
+    const sstable_lookup_t* lookup_1, 
+    const sstable_lookup_t* lookup_2
+) {
+    return strcmp(lookup_1->id, lookup_2->id);
+}
+
+int cmp_id_address_lookup(
+    const id_address_lookup_t* lookup_1, 
+    const id_address_lookup_t* lookup_2
+) {
+    return strcmp((char*)lookup_1->id, (char*)lookup_2->id);
+}
+
+ future_sstable_lookup_t* init_future_sstable_lookup_t(
+    sstable_t* sstable,
+    char* sstable_file,
+    int block_number,
+    unsigned char* entry_id
+ ) {
+    if (block_number < 0) {
+        perror("Provided 'block_number' cannot be less than 0");
+        exit(1);
+    }
+
+    future_sstable_lookup_t* future_lookup = malloc(
+        sizeof(future_sstable_lookup_t)
+    );
+    future_lookup->ids_length = 1;
+    // TODO: move this into a param
+    future_lookup->ids_capacity = 10;
+    
+    future_lookup->ids = malloc(
+        future_lookup->ids_capacity * sizeof(unsigned char*)
+    );
+    future_lookup->ids[future_lookup->ids_length - 1] = malloc(
+        sstable->id_size
+    );
+    memcpy(
+        future_lookup->ids[future_lookup->ids_length - 1], 
+        entry_id,
+        sstable->id_size
+    );
+
+    if (sstable_file == NULL) {
+        future_lookup->address = init_sstable_address(
+            sstable,
+            create_sstable_file(sstable->table_name),
+            block_number 
+        );
+    } else {
+        future_lookup->address = init_sstable_address( 
+            sstable,
+            sstable_file,
+            block_number
+        );
+    }
+
+    future_lookup->id = future_lookup->address->hash_code;
+
+
+    return future_lookup;
+}
+
+char* get_file_extension(char* file_path) {
+    const char *dot = strrchr(file_path, '.');
+    if (!dot || dot == file_path) return NULL; 
+    const char *slash = strrchr(file_path, '/');
+
+    if (slash == NULL || dot > slash) {
+        return dot;
+    } 
+
+    return NULL;
+}
+
+char* get_temp_sstable_file(sstable_t* sstable, char* file_path) {
+    char* temp_file_path = strdup(file_path);
+    char* bname = basename(temp_file_path);
+    const char* dot_position = strrchr(bname, '.');
+    char* final_file = malloc(MAX_PATH_SIZE);
+    
+    const char* file_name;
+    const char *last_slash = strrchr(file_path, '/');
+    const char *last_backslash = strrchr(file_path, '\\');
+
+    if (last_slash != NULL) {
+        file_name = last_slash + 1;
+    } else if (last_backslash != NULL) {
+        file_name = last_backslash + 1;
+    } else {
+        file_name = file_path; // No path separators, the input is just a file_name
+    }
+
+    size_t length_no_ext = strlen(file_name) - strlen(dot_position);
+
+    char* basename_no_ext = (char*)malloc(length_no_ext + 1);
+    if (basename_no_ext != NULL) {
+        strncpy(basename_no_ext, file_name, length_no_ext);
+    }
+
+    snprintf(
+        final_file,
+        MAX_PATH_SIZE,
+        "%s/%s%s%s",
+        sstable->sstable_dir_path,
+        basename_no_ext,
+        "_temp",
+        get_file_extension(file_path)
+    );
+
+    return final_file;
+}
+
+int file_exists(char* file_path) {
+    struct stat st;
+    return (stat(file_path, &st) != 0) ? 0 : 1;
+}
+
+void future_sstable_lookup_append(
+    sstable_t* sstable,
+    future_sstable_lookup_t* future_lookup,
+    unsigned char* entry_id
+) {
+    future_lookup->ids_length += 1;
+
+    if (future_lookup->ids_length > future_lookup->ids_capacity) {
+        future_lookup->ids_capacity *= 2;
+        unsigned char** temp = realloc(
+            future_lookup->ids,
+            (future_lookup->ids_capacity * sizeof(unsigned char*))
+        );
+        future_lookup->ids = temp;
+    }
+
+    future_lookup->ids[future_lookup->ids_length - 1] = malloc(
+        sstable->id_size 
+    );
+
+    memcpy(
+        future_lookup->ids[future_lookup->ids_length - 1],
+        entry_id,
+        sstable->id_size
+    );
+
+    return;
+}
+
+
+// TODO: 
+// 1. handle block overflow when writing new entries
+// 2. reset the lookup map after flushing memtable
+// 3. reset the memtable after flushing 
+// 4. make it so that later entries don't automatically get added to new sstable  
+void flush_memtable(sstable_t* sstable) {
+    load_memtable_from_file(sstable);
+    HASH_SORT(sstable->memtable, cmp_id_address_lookup);
+    HASH_SORT(sstable->lookup_map, cmp_sstable_lookup);
+
+    int diff;
+    int tmp_entry_diff;
+    future_sstable_lookup_t* future_lookups = NULL;
+    future_sstable_lookup_t* tmp_fut_lookup = NULL;
+    id_address_lookup_t* curr_memtable_entry = sstable->memtable;
+    sstable_lookup_t* curr_sstable_lookup = sstable->lookup_map;
+
+    while (curr_memtable_entry != NULL) {
+        if (curr_sstable_lookup != NULL) {
+            diff = strcmp(
+                (const char*)curr_memtable_entry->id, 
+                (const char*)curr_sstable_lookup->id
+            );
+        } 
+        
+        // e.g., memtable entry = "id3", sstable lookup = "id5"
+        if (curr_sstable_lookup != NULL && diff > 0) {
+            // reset the tmp lookup since the next entries will need to go to a different sstable 
+            curr_sstable_lookup = curr_sstable_lookup->hh.next;
+            tmp_fut_lookup = NULL;
+            continue;
+        }
+
+        // otherwise, this memtable entry belongs in the current sstable 
+        // or a new one if we don't have tmp instantiated yet 
+        if (tmp_fut_lookup != NULL) {
+            future_sstable_lookup_append(
+                sstable,
+                tmp_fut_lookup,
+                curr_memtable_entry->id
+            ); 
+        } else if (curr_sstable_lookup == NULL) {
+            tmp_fut_lookup = init_future_sstable_lookup_t(
+                sstable,
+                get_next_sstable_file_name(sstable->table_name),
+                0,
+                curr_memtable_entry->id
+            );
+
+            HASH_ADD_KEYPTR(
+                hh,
+                future_lookups,
+                tmp_fut_lookup->id,
+                sstable->sstable_address_hash_size,
+                tmp_fut_lookup
+            );
+        } else {
+            tmp_fut_lookup = init_future_sstable_lookup_t(
+                sstable,
+                curr_sstable_lookup->address->sstable_file_name,
+                curr_sstable_lookup->address->block_number,
+                curr_memtable_entry->id
+            );
+
+            HASH_ADD_KEYPTR(
+                hh,
+                future_lookups,
+                tmp_fut_lookup->id,
+                sstable->sstable_address_hash_size,
+                tmp_fut_lookup
+            );
+
+            curr_sstable_lookup = curr_sstable_lookup->hh.next;
+        }
+        
+        curr_memtable_entry = (id_address_lookup_t*)curr_memtable_entry->hh.next;
+    }
+
+    future_sstable_lookup_t* curr_lu = malloc(sizeof(future_sstable_lookup_t));
+    future_sstable_lookup_t* tmp = malloc(sizeof(future_sstable_lookup_t));
+    FILE* curr_sstable;
+    FILE* temp_sstable;
+
+    HASH_ITER(hh, future_lookups, curr_lu, tmp) {
+        if (file_exists(curr_lu->address->sstable_file_name)) {
+            curr_sstable = fopen(curr_lu->address->sstable_file_name, "rb+");
+            fseek(
+                curr_sstable, 
+                sstable->block_size * curr_lu->address->block_number,
+                SEEK_SET
+            );
+        }
+
+        char* temp_sstable_file = get_temp_sstable_file(sstable, curr_lu->address->sstable_file_name);
+        temp_sstable = fopen(temp_sstable_file, "wb+");
+        unsigned char* curr_id = malloc(sstable->id_size);
+        id_address_lookup_t* parsed_lookup = NULL;
+        int bytes_read = 0;
+        int total_bytes_read = 0;
+
+        for (int i = 0; i < curr_lu->ids_length; i++) {
+            size_t entry_size = get_id_address_entry_size(sstable->id_size);
+            char* entry = malloc(entry_size);
+
+            if (file_exists(curr_lu->address->sstable_file_name)) {
+                while (
+                    (bytes_read = fread(entry, 1, entry_size, curr_sstable)) == entry_size && 
+                    total_bytes_read < sstable->block_size && 
+                    (parsed_lookup = parse_sstable_file_entry(entry, sstable->id_size)) && 
+                    parsed_lookup != NULL &&
+                    parsed_lookup->id != NULL &&  
+                    curr_lu != NULL && 
+                    curr_lu->ids != NULL && 
+                    (strcmp(curr_lu->ids[i], parsed_lookup->id)) > 0
+                ) {
+                    total_bytes_read += bytes_read;
+                    fwrite(entry, entry_size, 1, temp_sstable);
+                }
+                
+                // TODO: need to handle block overflow 
+                total_bytes_read = 0;
+            }
+            // TODO: make sure that we're not reading partial before writing?
+            unsigned char* curr_key = curr_lu->ids[i];
+            id_address_lookup_t* curr_address = NULL;
+
+            HASH_FIND(
+                hh, sstable->memtable, curr_key, sstable->id_size, curr_address
+            );
+
+            if (curr_address == NULL) {
+                perror("No matching entry for key");
+                exit(1);
+            }
+
+            unsigned char* id_addr_entry = id_address_to_file_entry(sstable, curr_address);
+            fwrite(id_addr_entry, entry_size, 1, temp_sstable);
+            free(id_addr_entry);
+
+            // If there's still ids left to compare for the memtable, keep comparing to what's in the file 
+            if (i < curr_lu->ids_length - 1) {
+                continue;
+            }
+
+            // If we're not done with entries in the current sstable, continue adding to the temp file
+            // TODO: need to consider what happens if we need to resize the sstable  
+            if (file_exists(curr_lu->address->sstable_file_name)) {
+                while (
+                    (bytes_read = fread(entry, 1, entry_size, curr_sstable)) == entry_size) {
+                    total_bytes_read += bytes_read;
+                    fwrite(entry, entry_size, 1, temp_sstable);
+                }
+
+                total_bytes_read = 0;
+            }
+        }
+
+        fclose(temp_sstable);
+        fclose(curr_sstable);
+        // TODO: will need to do checks to see if anyone's still using that file 
+        //       maybe better to move to an entirely new file 
+        // TODO: overwrite the memtable file 
+        rename(temp_sstable_file, curr_lu->address->sstable_file_name);
+    }
+
+    int i = 0;
+}
+
+
 int main() {
     char* table_name = "test_table";
     size_t id_size = 50;
@@ -632,11 +1194,6 @@ int main() {
     );
 
     int num_iters = 10;
-    /**
-     * 1. load memtable from file
-     * 1. add entry to memtable (in-memory)
-     * 2. add entry to memtable (file)
-     */
     uuid_t binuuid;
     unsigned char *uuid_str = malloc(id_size); 
     id_address_lookup_t* lookup;
@@ -650,6 +1207,7 @@ int main() {
     }
     
     free(uuid_str);
+    flush_memtable(sstable);
     return 0;
 }
 
