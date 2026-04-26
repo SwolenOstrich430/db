@@ -1,0 +1,5 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     '/Users/peterconnelly/Documents/GitHub/db/log/log_db_hash_map'
+relocations:     []
+...

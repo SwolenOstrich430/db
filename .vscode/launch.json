@@ -5,10 +5,14 @@
       "type": "lldb",
       "request": "launch",
       "name": "Debug C Program",
-      "program": "${workspaceFolder}/log/out",
-      "args": [],
+      "args": [
+        "-fsanitize=address",
+      ],
+      // "command": "gcc -g ${workspaceFolder}/${file}",
+      "program": "${workspaceFolder}/log/${fileBasenameNoExtension}.o",
       "cwd": "${workspaceFolder}",
-      "stopAtEntry": true
+      "preLaunchTask": "C/C++: clang build active file",
+      // "stopAtEntry": true
     },
     {
       "name": "C/C++ Runner: Debug Session",
@@ -16,6 +20,7 @@
       "request": "launch",
       "args": [],
       "cwd": ".",
+      "preLaunchTask": "C/C++: clang build active file",
       "program": "build/Debug/outDebug"
     }
   ]

@@ -19,6 +19,7 @@ typedef struct {
     unsigned char *file_name;
     UT_hash_handle hh;
 } sstable_lookup_t;
+
 typedef struct {
     unsigned char* id;
     unsigned char* bytes;          
@@ -310,7 +311,7 @@ void set_sstable_lookup_map(
     DIR *dir = opendir(sstable->sstable_dir);
 
     if (dir == NULL) {
-        perror("Unable to open sstable directory for lookup map creation");
+        perror("error: Unable to open sstable directory for lookup map creation");
     }
     
     size_t entry_size = key_size + sizeof(int) + sizeof(SSTABLE_LOOKUP_SEPERATOR);
